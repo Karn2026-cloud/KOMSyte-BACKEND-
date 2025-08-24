@@ -12,8 +12,11 @@ const XLSX = require('xlsx');
 const nodemailer = require('nodemailer');
 require('dotenv').config();
 
+
 // ---------------- App Setup ----------------
-// In index.js
+const app = express(); // ✅ FIX: Initialize the app here, BEFORE using it.
+
+// ✅ Middleware must be set up AFTER the app is created.
 const allowedOrigins = ['http://localhost:3000', 'http://localhost:5173', process.env.FRONTEND_URL];
 app.use(cors({
   origin: (origin, callback) => {
@@ -657,4 +660,5 @@ app.get('/api/bills/:id', authMiddleware, async (req, res) => {
 
 // ---------------- Start Server ----------------
 const PORT = process.env.PORT || 5000;
+
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
