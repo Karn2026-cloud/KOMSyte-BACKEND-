@@ -14,9 +14,9 @@ require('dotenv').config();
 
 
 // ---------------- App Setup ----------------
-const app = express(); // ✅ FIX: Initialize the app here, BEFORE using it.
+const app = express();
 
-// ✅ Middleware must be set up AFTER the app is created.
+// Middleware must be set up AFTER the app is created.
 const allowedOrigins = ['http://localhost:3000', 'http://localhost:5173', process.env.FRONTEND_URL];
 app.use(cors({
   origin: (origin, callback) => {
@@ -28,6 +28,10 @@ app.use(cors({
   },
   credentials: true
 }));
+
+// ✅ FIX 1: Added express.json() to parse incoming JSON request bodies.
+// This is critical for req.body to work in your routes (login, webhooks, etc.).
+app.use(express.json());
 
 // ---------------- MongoDB ----------------
 mongoose.connect(process.env.MONGO_URI)
@@ -45,7 +49,7 @@ const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 const EMAIL_USER = process.env.EMAIL_USER;
 const EMAIL_PASS = process.env.EMAIL_PASS;
 
-// ✅ Map your internal plans to the Plan IDs from your Razorpay Dashboard
+// Map your internal plans to the Plan IDs from your Razorpay Dashboard
 const RAZORPAY_PLAN_IDS = {
   '1':'plan_R99uzrPRrLAkAw',
   '299':  'plan_R99u9A4JWMrNCj', // 👈 REPLACE WITH YOUR 299 PLAN ID
@@ -56,7 +60,6 @@ const RAZORPAY_PLAN_IDS = {
 
 
 // --- Updated PLANS to match requested plan structure and features ---
-// keys are strings: 'free', '299', '699', '1499'
 const PLANS = {
   free: {
     name: 'Free',
@@ -65,8 +68,8 @@ const PLANS = {
     features: {
       billingHistory: true,
       downloadBill: false,
-      updateQuantity: false, // Feature correctly defined
-      reports: 'none', // none / simple / all
+      updateQuantity: false,
+      reports: 'none',
       whatsappShare: false,
       emailShare: false,
       lowStockAlert: false,
@@ -81,8 +84,8 @@ const PLANS = {
     features: {
       billingHistory: true,
       downloadBill: true,
-      updateQuantity: true, // Feature correctly defined
-      reports: 'simple', // 2 KPIs
+      updateQuantity: true,
+      reports: 'simple',
       whatsappShare: false,
       emailShare: false,
       lowStockAlert: false,
@@ -97,8 +100,8 @@ const PLANS = {
     features: {
       billingHistory: true,
       downloadBill: true,
-      updateQuantity: true, // Feature correctly defined
-      reports: 'all', // 6 KPIs + graphs
+      updateQuantity: true,
+      reports: 'all',
       whatsappShare: true,
       emailShare: false,
       lowStockAlert: true,
@@ -113,7 +116,7 @@ const PLANS = {
     features: {
       billingHistory: true,
       downloadBill: true,
-      updateQuantity: true, // Feature correctly defined
+      updateQuantity: true,
       reports: 'all',
       whatsappShare: true,
       emailShare: true,
@@ -136,22 +139,20 @@ const transporter = (EMAIL_USER && EMAIL_PASS) ? nodemailer.createTransport({
 }) : null;
 
 // ---------------- Schemas ----------------
-// ---------------- Schemas ----------------
-// ✅ Updated Subscription Schema
 const subscriptionSchema = new mongoose.Schema({
   plan: { type: String, enum: Object.keys(PLANS), default: 'free' },
   status: { type: String, enum: ['inactive', 'active', 'canceled', 'halted'], default: 'inactive' },
   startDate: Date,
   nextBillingDate: Date,
   razorpayPaymentId: String,
-  razorpaySubscriptionId: String, // To link to Razorpay's subscription
+  razorpaySubscriptionId: String,
 }, { _id: false });
 
 const shopSchema = new mongoose.Schema({
   shopName: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  subscription: { type: subscriptionSchema, default: { plan: 'free', status: 'active' } }, // Free plan is active by default
+  subscription: { type: subscriptionSchema, default: { plan: 'free', status: 'active' } },
 }, { timestamps: true });
 
 const productSchema = new mongoose.Schema({
@@ -207,10 +208,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-/**
- * subscriptionMiddleware(requiredPlans = [], maxProducts = null)
- * - This middleware also attaches `req.planConfig` for downstream checks.
- */
+
 function subscriptionMiddleware(requiredPlans = []) {
   return async (req, res, next) => {
     try {
@@ -321,7 +319,7 @@ app.get(['/api/me', '/api/profile'], authMiddleware, async (req, res) => {
 app.get('/api/plans', (_, res) => res.json({ plans: Object.entries(PLANS).map(([id, val]) => ({ id, ...val })) }));
 
 
-// ✅ This NEW route replaces your old '/api/subscribe'
+// Create Subscription Route
 app.post("/api/create-subscription", authMiddleware, async (req, res) => {
   try {
     const { plan } = req.body;
@@ -331,7 +329,8 @@ app.post("/api/create-subscription", authMiddleware, async (req, res) => {
     const shop = await Shop.findById(req.shopId);
     if (!shop) return res.status(404).json({ error: "Shop not found" });
 
-    const subscription = await razorpayInstance.subscriptions.create({
+    // ✅ FIX 2: Corrected variable name from razorpayInstance to razorpay
+    const subscription = await razorpay.subscriptions.create({
       plan_id: planId,
       customer_notify: 1,
       total_count: 12, // Authorize for 12 monthly payments
@@ -356,7 +355,7 @@ app.post("/api/create-subscription", authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ This NEW route handles ALL payment confirmations automatically
+// Razorpay Webhook Route
 app.post("/api/razorpay-webhook", async (req, res) => {
   const secret = RAZORPAY_WEBHOOK_SECRET;
   const signature = req.headers['x-razorpay-signature'];
@@ -412,20 +411,18 @@ app.post("/api/razorpay-webhook", async (req, res) => {
 
 // ---------------- Products ----------------
 
-// ---------------- Products Handler (UPDATED) ----------------
+// Products Handler
 async function handleAddOrUpdateProduct(req, res) {
   try {
     const { barcode, name, price, quantity, updateStock } = req.body;
     if (!barcode) return res.status(400).json({ error: 'Barcode required' });
 
-    // req.planConfig is available from subscriptionMiddleware
     const planConfig = req.planConfig;
     const planMax = planConfig.maxProducts || 0;
 
     let product = await Product.findOne({ shopId: req.shopId, barcode });
 
     if (updateStock) {
-      // ✅ FIX: Check if the user's plan allows quantity updates.
       if (!planConfig.features.updateQuantity) {
           return res.status(403).json({ error: 'Updating product quantity is not available on your current plan. Please upgrade.' });
       }
@@ -458,8 +455,7 @@ async function handleAddOrUpdateProduct(req, res) {
   }
 }
 
-// ---------------- Products Routes ----------------
-// Both routes now correctly pass through the subscription middleware before hitting the handler.
+// Products Routes
 app.post('/api/stock', authMiddleware, subscriptionMiddleware(), handleAddOrUpdateProduct);
 app.post('/api/products', authMiddleware, subscriptionMiddleware(), handleAddOrUpdateProduct);
 
@@ -472,7 +468,6 @@ app.post('/api/stock/upload', authMiddleware, subscriptionMiddleware(['299', '69
     const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
     if (!sheet.length) return res.status(400).json({ error: 'Excel file is empty' });
     
-    // req.planConfig is available from subscriptionMiddleware
     const planMax = req.planConfig.maxProducts || Infinity;
     let productCount = await Product.countDocuments({ shopId: req.shopId });
     const results = [];
@@ -525,11 +520,9 @@ app.get('/api/stock', authMiddleware, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Failed to fetch stock' }); }
 });
 
-// Update stock by barcode (UPDATED)
-// ✅ FIX: Added subscriptionMiddleware and plan feature check.
+// Update stock by barcode
 app.put('/api/stock/:barcode', authMiddleware, subscriptionMiddleware(), async (req, res) => {
   try {
-    // ✅ FIX: Check if the user's plan allows quantity updates.
     if (!req.planConfig.features.updateQuantity) {
         return res.status(403).json({ error: 'Updating product quantity is not available on your current plan. Please upgrade.' });
     }
@@ -662,4 +655,3 @@ app.get('/api/bills/:id', authMiddleware, async (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
